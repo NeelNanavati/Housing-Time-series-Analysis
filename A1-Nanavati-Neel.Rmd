@@ -1,0 +1,246 @@
+---
+title: "Housing Starts Analysis"
+output: html_document
+---
+
+```{r setup}
+library(readr)
+library(dplyr)
+library(tsibble)
+library(lubridate)
+library(ggplot2)
+library(feasts)
+install.packages("ggtime")   
+dir.create("results", showWarnings = FALSE)
+```
+
+# Part 1: Loading the data
+
+The data come from FRED (series HOUSTNSA), which republishes numbers from the U.S. Census Bureau. Put `HOUSTNSA.csv` in the same folder as this file so the relative path works.
+
+```{r load}
+housing_raw <- read.csv('/Users/neelnanavati/Downloads/Business conditions Analysis /HOUSTNSA.csv')
+
+names(housing_raw)
+head(housing_raw)
+
+# FRED's column names are awkward, so rename them
+names(housing_raw) <- c("date", "starts")
+
+housing <- housing_raw %>%
+  mutate(date = as.Date(date),
+         starts = as.numeric(starts)) %>%
+  filter(date >= as.Date("2005-01-01"),
+         date <= as.Date("2025-12-01")) %>%
+  arrange(date)
+```
+
+**Source notes**
+
+- Series: HOUSTNSA, https://fred.stlouisfed.org/series/HOUSTNSA
+- Producer: U.S. Census Bureau (FRED just hosts it)
+- Frequency: monthly
+- Units: thousands of housing units
+- Seasonal adjustment: none
+- Downloaded: `r Sys.Date()`
+
+Each observation is the number of new privately owned housing units started in a given month. Housing starts are a handy gauge of business conditions because builders respond quickly to mortgage rates, credit availability, household formation and how optimistic they feel about the economy.
+
+# Part 2: Setting up and checking the data
+
+```{r tsibble}
+housing_ts <- housing %>%
+  mutate(month = yearmonth(date)) %>%
+  select(month, starts) %>%
+  as_tsibble(index = month)
+
+cat("Start:", as.character(min(housing_ts$month)), "\n")
+cat("End:", as.character(max(housing_ts$month)), "\n")
+cat("Rows:", nrow(housing_ts), "\n")
+cat("Duplicate months:", sum(duplicated(housing_ts$month)), "\n")
+cat("Missing starts:", sum(is.na(housing_ts$starts)), "\n")
+```
+
+```{r gaps}
+# Build the list of months I expect and see if any are absent
+expected_months <- yearmonth(seq(as.Date("2005-01-01"),
+                                 as.Date("2025-12-01"),
+                                 by = "month"))
+missing_months <- setdiff(expected_months, housing_ts$month)
+
+cat("Expected months:", length(expected_months), "\n")
+cat("Missing months:", length(missing_months), "\n")
+
+count_gaps(housing_ts)
+
+stopifnot(
+  !anyDuplicated(housing_ts$month),
+  !anyNA(housing_ts$starts),
+  length(missing_months) == 0,
+  nrow(housing_ts) == 252
+)
+```
+
+The index is the calendar month, the variable is housing starts, and each row is one month. It's a time series because the order of the observations matters. There's only one series, so I don't need a key. If I were stacking several states or indicators together, a key would tell them apart.
+
+Having no missing values doesn't prove every month is there, since an entire row could simply be absent. That's why I also check for gaps with `count_gaps()`. If gaps did turn up, `fill_gaps()` would add rows for them, but it can't recover the missing values.
+
+# Part 3: Time plots and annual averages
+
+```{r timeplot}
+p1 <- ggplot(housing_ts, aes(x = month, y = starts)) +
+  geom_line(linewidth = 0.5) +
+  labs(title = "Monthly U.S. Housing Starts, 2005-2025",
+       x = "Month", y = "Housing starts (thousands of units)",
+       caption = "Source: U.S. Census Bureau via FRED; not seasonally adjusted") +
+  theme_minimal()
+p1
+ggsave("results/housing_starts_monthly.png", p1, width = 10, height = 6, dpi = 300)
+```
+
+```{r shortplot}
+housing_short <- housing_ts %>%
+  filter(month >= yearmonth("2018 Jan"),
+         month <= yearmonth("2021 Dec"))
+
+p2 <- ggplot(housing_short, aes(x = month, y = starts)) +
+  geom_line(linewidth = 0.6) +
+  labs(title = "Monthly Housing Starts, 2018-2021",
+       x = "Month", y = "Housing starts (thousands of units)") +
+  theme_minimal()
+p2
+ggsave("results/housing_starts_2018_2021.png", p2, width = 10, height = 6, dpi = 300)
+```
+
+```{r annual}
+# Yearly averages, keeping only years with all 12 months
+annual <- housing_ts %>%
+  mutate(year = year(as.Date(month))) %>%
+  group_by(year) %>%
+  summarise(annual_mean = mean(starts),
+            months_observed = n(),
+            .groups = "drop") %>%
+  filter(months_observed == 12)
+
+annual
+
+p3 <- ggplot(annual, aes(x = year, y = annual_mean)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = seq(2005, 2025, by = 2)) +
+  labs(title = "Annual Average U.S. Housing Starts, 2005-2025",
+       x = "Year", y = "Annual average (thousands of units)") +
+  theme_minimal()
+p3
+ggsave("results/housing_starts_annual_means.png", p3, width = 10, height = 6, dpi = 300)
+```
+
+The full-sample plot shows slow, long-run swings layered with sharp short-term movement from month to month. The 2018-2021 window lets me look more closely at what happened around the COVID shock in spring 2020 and the rebound afterward.
+
+An annual mean is the average of the twelve monthly values, so it's still in thousands of units. An annual total would add them up instead. Averaging by year smooths out the seasonal pattern and makes it harder to see exactly when a turning point happened.
+
+# Part 4: Seasonal and subseries plots
+
+```{r seasonal}
+p4 <- housing_ts %>%
+  gg_season(starts) +
+  labs(title = "Seasonal Plot of Monthly Housing Starts",
+       x = "Month", y = "Housing starts (thousands of units)") +
+  theme_minimal()
+p4
+ggsave("results/housing_starts_seasonal.png", p4, width = 10, height = 6, dpi = 300)
+```
+
+```{r subseries}
+p5 <- housing_ts %>%
+  gg_subseries(starts) +
+  labs(title = "Seasonal Subseries Plot of Housing Starts",
+       x = "Year", y = "Housing starts (thousands of units)") +
+  theme_minimal()
+p5
+ggsave("results/housing_starts_subseries.png", p5, width = 10, height = 6, dpi = 300)
+```
+
+The seasonal plot stacks each year on top of the others so I can compare the same months across years. The subseries plot splits the data by calendar month, and the horizontal line in each panel is that month's average over the whole sample. Winter months (especially January and February) tend to come in low, while spring and summer run higher, which fits the effect of cold weather on construction. Because the series isn't seasonally adjusted, this pattern stays visible. Comparing a boom year like 2006 with a weak one like 2009 should show the same overall shape but a much smaller gap between the high and low months in the weak year.
+
+# Part 5: Lag plots and autocorrelation
+
+```{r lag1}
+p6 <- housing_ts %>%
+  gg_lag(starts, lags = 1) +
+  labs(title = "Lag Plot of Housing Starts: Lag 1",
+       x = "Previous month's starts (thousands)",
+       y = "Current month's starts (thousands)") +
+  theme_minimal()
+p6
+ggsave("results/housing_starts_lag1.png", p6, width = 8, height = 6, dpi = 300)
+```
+
+```{r lag12}
+p7 <- housing_ts %>%
+  gg_lag(starts, lags = 12) +
+  labs(title = "Lag Plot of Housing Starts: Lag 12",
+       x = "Starts 12 months earlier (thousands)",
+       y = "Current month's starts (thousands)") +
+  theme_minimal()
+p7
+ggsave("results/housing_starts_lag12.png", p7, width = 8, height = 6, dpi = 300)
+```
+
+```{r acf}
+p8 <- housing_ts %>%
+  ACF(starts, lag_max = 48) %>%
+  autoplot() +
+  labs(title = "ACF of Monthly Housing Starts",
+       x = "Lag (months)", y = "Autocorrelation") +
+  theme_minimal()
+p8
+ggsave("results/housing_starts_acf.png", p8, width = 10, height = 6, dpi = 300)
+```
+
+For comparison, here is the ACF of pure white noise, with the same number of observations as my data.
+
+```{r whitenoise}
+set.seed(3232026)
+white_noise <- rnorm(252)
+
+cat("Seed: 3232026\n")
+cat("n:", length(white_noise), "\n")
+cat("Mean:", round(mean(white_noise), 3), "\n")
+cat("SD:", round(sd(white_noise), 3), "\n")
+
+white_ts <- tsibble(
+  month = yearmonth(seq(as.Date("2005-01-01"), by = "month", length.out = 252)),
+  value = white_noise,
+  index = month
+)
+
+p9 <- white_ts %>%
+  ACF(value, lag_max = 48) %>%
+  autoplot() +
+  labs(title = "ACF of Simulated White Noise",
+       x = "Lag (months)", y = "Autocorrelation") +
+  theme_minimal()
+p9
+ggsave("results/white_noise_acf.png", p9, width = 10, height = 6, dpi = 300)
+
+bound <- 1.96 / sqrt(252)
+cat("Approximate 95% bounds: +/-", round(bound, 3), "\n")
+```
+
+Lag 1 compares each month with the one right before it, and lag 12 compares it with the same month a year earlier. Both should show a positive relationship, partly because of the longer-run trend and partly because of seasonality. In the ACF, I'm looking at the short lags first and then at lags 12, 24, 36 and 48 to see whether the seasonal pattern shows up as bumps.
+
+With 252 independent observations, the rough 95% bands are about plus or minus 0.123. The white noise series should mostly stay inside them, though an occasional spike outside is expected by chance when checking this many lags. My housing series is a different story: its autocorrelations are far outside the bands at many lags, which is a sign of real structure, not randomness.
+
+# Part 6: Discussion
+
+Housing starts show how much new home building is happening, which tells us a lot about the economy. The long-run plot shows a big boom in the mid-2000s, a huge crash around the financial crisis, and a slow recovery after that. There was also a short, sharp drop in spring 2020 from COVID, followed by a quick bounce back. So the series has both long-lasting swings and sudden short-term changes.
+Starts are usually lowest in winter and higher in spring and summer. This pattern looks similar from year to year, but the gap between the high and low months is smaller when the overall level of building is low. Each month is also closely tied to the month before it, and the same month a year earlier. That helps with forecasting, but interest rates and economic shocks can still change things quickly.
+If we treat December 2025 as the starting point, a 12-month-ahead forecast would predict housing starts for December 2026. A homebuilder or supplier could use it to plan hiring and inventory. A point forecast gives one number, while an interval forecast gives a range to show the uncertainty. A goal is what you want to happen, but a forecast is what you expect to happen.
+Finally, data downloaded today can differ from what was available back in December 2025 because numbers get revised. A fair forecasting test should only use information that was available at the time.
+
+
+
+
+
+
