@@ -45,25 +45,19 @@ Zoomed time plot of the spring 2020 shock and the rebound.
 
 ![2. Monthly housing starts, 2018-2021](results/Graphs/housing_starts_2018_2021.png)
 
-### 3. Annual average housing starts
-
-Annual averages smooth out seasonality to show the long-run trend.
-
-![3. Annual average housing starts](results/Graphs/housing_starts_annual_means.png)
-
-### 4. Seasonal plot
+### 3. Seasonal plot
 
 Each year drawn as its own line across the 12 months, so the same months can be compared across years.
 
 ![4. Seasonal plot](results/Graphs/housing_starts_seasonal.png)
 
-### 5. Seasonal subseries plot
+### 4. Seasonal subseries plot
 
 One panel per calendar month, with a line at that month's average.
 
 ![5. Seasonal subseries plot](results/Graphs/housing_starts_subseries.png)
 
-### 6. Lag plot, lag 1
+### 5. Lag plot, lag 1
 
 Each month's starts against the previous month's. Shows short-term dependence.
 
